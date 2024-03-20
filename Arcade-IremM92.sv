@@ -17,6 +17,7 @@
 //  with this program; if not, write to the Free Software Foundation, Inc.,
 //  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 //============================================================================
+//LLAPI: llapi.sv needs to be in rtl folder and needs to be declared in file.qip (set_global_assignment -name SYSTEMVERILOG_FILE rtl/llapi.sv)
 
 
 import m92_pkg::*;
@@ -179,7 +180,9 @@ module emu
 ///////// Default values for ports not used in this core /////////
 
 assign ADC_BUS  = 'Z;
-assign USER_OUT = '1;
+//LLAPI
+//assign USER_OUT = '1;
+//END LLAPI
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 assign CLK_VIDEO = clk_sys;
@@ -193,8 +196,9 @@ assign AUDIO_MIX = 0;
 
 assign LED_DISK = 0;
 assign LED_POWER = 0;
-assign BUTTONS = 0;
-
+//LLAPI
+assign BUTTONS   = llapi_osd;
+//END LLAPI
 //////////////////////////////////////////////////////////////////
 
 wire [1:0] ar = status[2:1];
@@ -215,7 +219,12 @@ wire dbg_sprite_freeze = 0;
 `include "build_id.v" 
 localparam CONF_STR = {
     "IremM92;;",
-    "-;",
+	//LLAPI: OSD menu item
+	//LLAPI Always ON
+	"-,<< LLAPI enabled >>;",
+	"-,<< Use USER I/O port >>;",
+	"-;",
+	//END LLAPI	
     "P1,Video Settings;",
     "P1O[2:1],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
     "P1O[31:29],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
@@ -270,7 +279,22 @@ wire  [7:0] ioctl_dout;
 wire  [7:0] ioctl_din = ioctl_m92_din | ioctl_hs_din;
 wire        ioctl_wait = ioctl_rom_wait | ioctl_dbg_wait;
 
-wire [15:0] joystick_p1, joystick_p2, joystick_p3, joystick_p4;
+
+//LLAPI rename HPS controller to USB
+
+wire [19:0] joy0;
+wire [19:0] joy1;
+wire [19:0] joy2;
+wire [19:0] joy3;
+
+wire [19:0] joy_usb_0;
+wire [19:0] joy_usb_1;
+wire [19:0] joy_usb_2;
+wire [19:0] joy_usb_3;
+
+//wire [15:0] joystick_p1, joystick_p2, joystick_p3, joystick_p4;
+
+//END LLAPI
 
 wire [21:0] gamma_bus;
 wire        direct_video;
@@ -308,14 +332,147 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
     .ioctl_din(ioctl_din),
     .ioctl_index(ioctl_index),
     .ioctl_wait(ioctl_wait),
-
-    .joystick_0(joystick_p1),
-    .joystick_1(joystick_p2),
-    .joystick_2(joystick_p3),
-    .joystick_3(joystick_p4),
-
+//LLAPI
+    .joystick_0(joy_usb_0),
+    .joystick_1(joy_usb_1),
+    .joystick_2(joy_usb_2),
+    .joystick_3(joy_usb_3),
+//END LLAPI
     .ps2_key(ps2_key)
 );
+
+
+//////////////////   LLAPI   ///////////////////
+
+wire [31:0] llapi_buttons, llapi_buttons2;
+wire [71:0] llapi_analog, llapi_analog2;
+wire [7:0]  llapi_type, llapi_type2;
+wire llapi_en, llapi_en2;
+
+wire llapi_select = 1'b1; //LLAPI always on
+
+wire llapi_latch_o, llapi_latch_o2, llapi_data_o, llapi_data_o2;
+
+// LLAPI Indexes:
+// 0 = D+    = P1 Latch
+// 1 = D-    = P1 Data
+// 2 = TX-   = LLAPI Enable
+// 3 = GND_d = N/C
+// 4 = RX+   = P2 Latch
+// 5 = RX-   = P2 Data
+
+
+always_comb begin
+	USER_OUT= 6'b111111;
+	if (llapi_select) begin
+		USER_OUT[0] = llapi_latch_o;
+		USER_OUT[1] = llapi_data_o;
+		USER_OUT[2] = ~(llapi_select & ~OSD_STATUS); // LED for Blister
+		USER_OUT[4] = llapi_latch_o2;
+		USER_OUT[5] = llapi_data_o2;
+	end
+end
+
+
+//Port 1 conf
+LLAPI llapi
+(
+	.CLK_50M(CLK_50M),
+	.LLAPI_SYNC(vblank),
+	.IO_LATCH_IN(USER_IN[0]),
+	.IO_LATCH_OUT(llapi_latch_o),
+	.IO_DATA_IN(USER_IN[1]),
+	.IO_DATA_OUT(llapi_data_o),
+	.ENABLE(llapi_select & ~OSD_STATUS),
+	.LLAPI_BUTTONS(llapi_buttons),
+	.LLAPI_ANALOG(llapi_analog),
+	.LLAPI_TYPE(llapi_type),
+	.LLAPI_EN(llapi_en)
+);
+
+//Port 2 conf
+LLAPI llapi2
+(
+	.CLK_50M(CLK_50M),
+	.LLAPI_SYNC(vblank),
+	.IO_LATCH_IN(USER_IN[4]),
+	.IO_LATCH_OUT(llapi_latch_o2),
+	.IO_DATA_IN(USER_IN[5]),
+	.IO_DATA_OUT(llapi_data_o2),
+	.ENABLE(llapi_select & ~OSD_STATUS),
+	.LLAPI_BUTTONS(llapi_buttons2),
+	.LLAPI_ANALOG(llapi_analog2),
+	.LLAPI_TYPE(llapi_type2),
+	.LLAPI_EN(llapi_en2)
+);
+
+reg llapi_button_pressed, llapi_button_pressed2;
+
+always @(posedge CLK_50M) begin
+        if (reset) begin
+                llapi_button_pressed  <= 0;
+                llapi_button_pressed2 <= 0;
+	end else begin
+	       	if (|llapi_buttons)
+                	llapi_button_pressed  <= 1;
+        	if (|llapi_buttons2)
+                	llapi_button_pressed2 <= 1;
+	end
+end
+
+// controller id is 0 if there is either an Atari controller or no controller
+// if id is 0, assume there is no controller until a button is pressed
+// also check for 255 and treat that as 'no controller' as well
+wire use_llapi  = llapi_en  && llapi_select && ((|llapi_type  && ~(&llapi_type))  || llapi_button_pressed);
+wire use_llapi2 = llapi_en2 && llapi_select && ((|llapi_type2 && ~(&llapi_type2)) || llapi_button_pressed2);
+
+//Controller string provided by core for reference (order is important)
+//Controller specific mapping based on type. More info here : https://docs.google.com/document/d/12XpxrmKYx_jgfEPyw-O2zex1kTQZZ-NSBdLO2RQPRzM/edit
+//llapi_Buttons id are HID id - 1
+
+//Port 1 mapping
+
+wire [19:0] joy_ll_a = {
+			llapi_buttons[4],  llapi_buttons[5], // Coin Start
+			llapi_buttons[7],  llapi_buttons[6],  llapi_buttons[3], // F E D
+			llapi_buttons[2],  llapi_buttons[1],  llapi_buttons[0], // C B A
+			llapi_buttons[27], llapi_buttons[26], llapi_buttons[25], llapi_buttons[24] // d-pad
+		};
+
+//Port 2 mapping
+
+wire [19:0] joy_ll_b = {
+			llapi_buttons2[4],  llapi_buttons2[5], // Coin Start
+			llapi_buttons2[7],  llapi_buttons2[6],  llapi_buttons2[3], // F E D
+		    llapi_buttons2[2],  llapi_buttons2[1],  llapi_buttons2[0], // C B A
+			llapi_buttons2[27], llapi_buttons2[26], llapi_buttons2[25], llapi_buttons2[24] // d-pad
+		};
+
+//Assign (DOWN + START + FIRST BUTTON) Combinaison to bring the OSD up - P1 and P2 ports.
+wire llapi_osd = (llapi_buttons[26] & llapi_buttons[5] & llapi_buttons[0]) || (llapi_buttons2[26] & llapi_buttons2[5] & llapi_buttons2[0]);
+
+// if LLAPI is enabled, shift USB controllers over to the next available player slot
+always_comb begin
+         if (use_llapi & use_llapi2) begin
+                joy0 = joy_ll_a;
+                joy1 = joy_ll_b;
+                joy2 = joy_usb_0;
+                joy3 = joy_usb_1;
+        end else if (use_llapi ^ use_llapi2) begin
+                joy0 = use_llapi  ? joy_ll_a : joy_usb_0;
+                joy1 = use_llapi2 ? joy_ll_b : joy_usb_0;
+                joy2 = joy_usb_1;
+                joy3 = joy_usb_2;
+        end else begin
+                joy0 = joy_usb_0;
+                joy1 = joy_usb_1;
+                joy2 = joy_usb_2;
+                joy3 = joy_usb_3;
+        end
+end
+
+//////////////////  END LLAPI   ///////////////////
+
 
 ///////////////////////   CLOCKS   ///////////////////////////////
 
@@ -488,12 +645,13 @@ end
 //////////////////  Arcade Buttons/Interfaces   ///////////////////////////
 wire [15:0] keyboard_p1, keyboard_p2, keyboard_p3, keyboard_p4;
 
-wire [15:0] merged_p1 = keyboard_p1 | joystick_p1;
-wire [15:0] merged_p2 = keyboard_p2 | joystick_p2;
-wire [15:0] merged_p3 = keyboard_p3 | joystick_p3;
-wire [15:0] merged_p4 = keyboard_p4 | joystick_p4;
+//LLAPI
+wire [15:0] merged_p1 = keyboard_p1 | joy0;
+wire [15:0] merged_p2 = keyboard_p2 | joy1;
+wire [15:0] merged_p3 = keyboard_p3 | joy2;
+wire [15:0] merged_p4 = keyboard_p4 | joy3;
 
-wire [15:0] joystick_combined = joystick_p1 | joystick_p2 | joystick_p3 | joystick_p4;
+wire [15:0] joystick_combined = joy0 | joy1 | joy2 | joy3;
 wire [3:0] key_coin, key_start;
 wire key_pause;
 
@@ -515,13 +673,14 @@ mame_keys mame_keys(
 );
 
 //Start/coin
-wire m_start1   = joystick_p1[10] | key_start[0];
-wire m_start2   = joystick_p2[10] | joystick_combined[12] | key_start[1];
-wire m_start3   = joystick_p3[10] | key_start[2];
-wire m_start4   = joystick_p4[10] | key_start[3];
+wire m_start1   = joy0[10] | key_start[0];
+wire m_start2   = joy1[10] | joystick_combined[12] | key_start[1];
+wire m_start3   = joy2[10] | key_start[2];
+wire m_start4   = joy3[10] | key_start[3];
 wire m_coin1    = joystick_combined[11] | |key_coin;
 wire m_coin2    = 0;
 wire m_pause    = joystick_combined[13] | key_pause;
+//END LLAPI
 
 //////////////////////////////////////////////////////////////////
 

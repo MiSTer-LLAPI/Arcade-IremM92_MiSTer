@@ -35,3 +35,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/v35/v35.sv
 
 set_global_assignment -name QIP_FILE rtl/jt51/jt51.qip
 
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/llapi.sv
